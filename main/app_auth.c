@@ -60,15 +60,46 @@ bool app_auth_is_paired(void)
 }
 
 #ifndef TEST_HOST
+typedef struct {
+    char *buffer;
+    size_t buffer_len;
+    size_t written;
+} http_resp_buf_t;
+
+static esp_err_t http_event_handler(esp_http_client_event_t *evt)
+{
+    http_resp_buf_t *res = (http_resp_buf_t *)evt->user_data;
+    if (evt->event_id == HTTP_EVENT_ON_DATA && res && res->buffer) {
+        if (res->written + evt->data_len < res->buffer_len) {
+            memcpy(res->buffer + res->written, evt->data, evt->data_len);
+            res->written += evt->data_len;
+            res->buffer[res->written] = '\0';
+        }
+    }
+    return ESP_OK;
+}
+
 static esp_err_t http_post_json(const char *url, const char *auth_header, const char *post_data,
                                 char *out_buf, size_t out_buf_len, int *out_status_code)
 {
+    if (out_buf && out_buf_len > 0) {
+        out_buf[0] = '\0';
+    }
+
+    http_resp_buf_t res_buf = {
+        .buffer = out_buf,
+        .buffer_len = out_buf_len,
+        .written = 0,
+    };
+
     esp_http_client_config_t config = {
         .url = url,
         .method = HTTP_METHOD_POST,
         .timeout_ms = 10000,
         .buffer_size = 2048,
         .crt_bundle_attach = esp_crt_bundle_attach,
+        .event_handler = http_event_handler,
+        .user_data = &res_buf,
     };
 
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -88,12 +119,6 @@ static esp_err_t http_post_json(const char *url, const char *auth_header, const 
     esp_err_t err = esp_http_client_perform(client);
     if (err == ESP_OK) {
         *out_status_code = esp_http_client_get_status_code(client);
-        int read_len = esp_http_client_read_response(client, out_buf, out_buf_len - 1);
-        if (read_len >= 0) {
-            out_buf[read_len] = '\0';
-        } else {
-            out_buf[0] = '\0';
-        }
     } else {
         ESP_LOGE(TAG, "HTTP POST to %s failed: %s", url, esp_err_to_name(err));
     }
