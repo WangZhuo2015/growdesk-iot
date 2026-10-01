@@ -27,6 +27,23 @@ static void test_field_boundaries(void)
     assert(!proposal.card.fields[2].emphasis);
 }
 
+static void test_whitespace_at_field_array_end(void)
+{
+    const char *json =
+        "{\"card\":{\"fields\":[{\"label\":\"Type\",\"value\":\"formula\"} \n]},"
+        "\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"test_action\"]},"
+        "\"runId\":\"test_run\"}";
+    passport_proposal_t proposal;
+    assert(app_protocol_parse_card(json, &proposal));
+    assert(proposal.card.field_count == 1);
+    const char *empty =
+        "{\"card\":{\"fields\":[ \n]},"
+        "\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"test_action\"]},"
+        "\"runId\":\"test_run\"}";
+    assert(app_protocol_parse_card(empty, &proposal));
+    assert(proposal.card.field_count == 0);
+}
+
 static void test_string_boundaries(void)
 {
     char value[16];
@@ -180,6 +197,7 @@ int main(void)
     assert(strcmp(msg, "Recording exceeded 30 seconds") == 0);
 
     test_field_boundaries();
+    test_whitespace_at_field_array_end();
     test_string_boundaries();
     test_envelope_and_nested_objects();
     test_truncated_cards();

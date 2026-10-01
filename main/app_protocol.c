@@ -297,6 +297,7 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
         const char *p = fields + 1;
         while (*p && *p != ']' && proposal->card.field_count < MAX_CARD_FIELDS) {
             p = skip_whitespace(p);
+            if (*p == ']') break;
             if (*p == '{') {
                 passport_card_field_t *f = &proposal->card.fields[proposal->card.field_count];
                 memset(f, 0, sizeof(*f));
