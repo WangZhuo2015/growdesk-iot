@@ -12,26 +12,77 @@ static const char *skip_whitespace(const char *p)
     return p;
 }
 
-static const char *find_key(const char *json, const char *key)
+// Return the byte after a complete JSON string, skipping escaped quotes.
+static const char *json_string_end(const char *p)
 {
-    if (!json || !key) return NULL;
-    size_t key_len = strlen(key);
-    const char *p = json;
+    if (!p || *p != '"') return NULL;
+    for (p++; *p; p++) {
+        if (*p == '"') return p + 1;
+        if ((unsigned char)*p < 0x20) return NULL;
+        if (*p == '\\') {
+            p++;
+            if (!*p) return NULL;
+        }
+    }
+    return NULL;
+}
 
+// Bound every lookup to its own container. In particular, a card field must
+// never borrow an optional unit/emphasis from a following field. A small fixed
+// stack also rejects excessive nesting without heap allocation or recursion.
+static const char *json_container_end(const char *p)
+{
+    char closing[16];
+    size_t depth = 0;
+    if (!p || (*p != '{' && *p != '[')) return NULL;
     while (*p) {
         if (*p == '"') {
-            p++;
-            if (strncmp(p, key, key_len) == 0 && p[key_len] == '"') {
-                const char *after = p + key_len + 1;
-                after = skip_whitespace(after);
-                if (*after == ':') {
-                    return skip_whitespace(after + 1);
-                }
-            }
+            p = json_string_end(p);
+            if (!p) return NULL;
+            continue;
+        }
+        if (*p == '{' || *p == '[') {
+            if (depth == sizeof(closing)) return NULL;
+            closing[depth++] = (*p == '{') ? '}' : ']';
+        } else if (*p == '}' || *p == ']') {
+            if (depth == 0 || closing[depth - 1] != *p) return NULL;
+            if (--depth == 0) return p + 1;
         }
         p++;
     }
     return NULL;
+}
+
+static const char *find_key(const char *json, const char *key)
+{
+    if (!json || !key) return NULL;
+    const char *p = skip_whitespace(json);
+    const char *end = json_container_end(p);
+    if (!end) return NULL;
+
+    const size_t key_len = strlen(key);
+    const char *nested_match = NULL;
+    size_t depth = 0;
+    while (p < end) {
+        if (*p == '"') {
+            const char *after_string = json_string_end(p);
+            if (!after_string) return NULL;
+            const char *after = skip_whitespace(after_string);
+            if (*after == ':' && (size_t)(after_string - p - 2) == key_len &&
+                memcmp(p + 1, key, key_len) == 0) {
+                const char *value = skip_whitespace(after + 1);
+                if (depth == 1) return value;
+                if (!nested_match) nested_match = value;
+            }
+            p = after_string;
+            continue;
+        }
+        if (*p == '{' || *p == '[') depth++;
+        else if (*p == '}' || *p == ']') depth--;
+        p++;
+    }
+    // Preserve lookups through HTTP data envelopes and nested audioFormat.
+    return nested_match;
 }
 
 bool app_json_get_string(const char *json, const char *key, char *out, size_t max_len)
@@ -60,6 +111,10 @@ bool app_json_get_string(const char *json, const char *key, char *out, size_t ma
             out[written++] = *val;
         }
         val++;
+    }
+    if (*val != '"') {
+        out[0] = '\0';
+        return false;
     }
     out[written] = '\0';
     return true;
@@ -218,6 +273,7 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
                 while (*act && *act != '"' && w + 1 < sizeof(proposal->action_id)) {
                     proposal->action_id[w++] = *act++;
                 }
+                if (*act != '"') return false;
                 proposal->action_id[w] = '\0';
             }
         }
@@ -250,14 +306,8 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
                 app_json_get_bool(p, "emphasis", &f->emphasis);
                 proposal->card.field_count++;
 
-                // skip to end of this field object
-                int depth = 1;
-                p++;
-                while (*p && depth > 0) {
-                    if (*p == '{') depth++;
-                    else if (*p == '}') depth--;
-                    p++;
-                }
+                p = json_container_end(p);
+                if (!p) return false;
             } else {
                 p++;
             }
