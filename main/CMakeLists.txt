@@ -1,5 +1,17 @@
 idf_component_register(
     SRCS "main.c"
+         "app_state.c"
+         "app_storage.c"
+         "app_cards.c"
+         "app_protocol.c"
+         "app_ui.c"
+         "app_network.c"
+         "app_blufi_security.c"
+         "app_provisioning.c"
+         "app_auth.c"
+         "app_audio.c"
+         "app_ws.c"
+         "../assets/fonts/growdesk_font_16.c"
          "demo_navigation.c"
          "ui_pixel.c"
          "ui_pixel_math.c"
@@ -12,5 +24,5 @@ idf_component_register(
          "demo_ble.c"
          "demo_low_power.c"
     INCLUDE_DIRS "."
-    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash
+    REQUIRES bsp bt esp_event esp_hw_support esp_netif esp_timer esp_wifi nvs_flash esp_http_client esp_websocket_client mbedtls
 )

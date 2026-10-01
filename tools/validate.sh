@@ -25,6 +25,27 @@ run_static_checks() {
 
     test_dir="$(mktemp -d /tmp/ai-passport-host-tests.XXXXXX)"
     "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_app_state.c -o "${test_dir}/test_app_state"
+    "${test_dir}/test_app_state"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
+        tests/test_app_protocol.c -o "${test_dir}/test_app_protocol"
+    "${test_dir}/test_app_protocol"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain -Itests/bsp_stubs \
+        tests/test_app_storage.c -o "${test_dir}/test_app_storage"
+    "${test_dir}/test_app_storage"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DTEST_HOST -Imain -Itests/bsp_stubs \
+        main/app_network.c tests/test_app_network.c -o "${test_dir}/test_app_network"
+    "${test_dir}/test_app_network"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DTEST_HOST -Imain -Itests/bsp_stubs \
+        main/app_auth.c main/app_storage.c main/app_protocol.c tests/test_app_auth.c -o "${test_dir}/test_app_auth"
+    "${test_dir}/test_app_auth"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DTEST_HOST -Imain -Itests/bsp_stubs \
+        main/app_ws.c main/app_protocol.c tests/test_app_ws.c -o "${test_dir}/test_app_ws"
+    "${test_dir}/test_app_ws"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -DTEST_HOST -Imain -Itests/bsp_stubs \
+        main/app_audio.c tests/test_app_audio.c -o "${test_dir}/test_app_audio"
+    "${test_dir}/test_app_audio"
+    "${CC:-cc}" -std=c11 -Wall -Wextra -Werror -Imain \
         tests/test_ui_pixel_math.c main/ui_pixel_math.c \
         -o "${test_dir}/test_ui_pixel_math"
     "${test_dir}/test_ui_pixel_math"
@@ -54,10 +75,14 @@ run_static_checks() {
         tests/test_bsp_audio_recovery.c components/bsp/src/bsp_es8311_sleep_check.c \
         -o "${test_dir}/test_bsp_audio_recovery"
     "${test_dir}/test_bsp_audio_recovery"
+    local gc_flag="-Wl,--gc-sections"
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        gc_flag="-Wl,-dead_strip"
+    fi
     for demo in audio low_power ble wifi; do
         "${CC:-cc}" -std=c11 -Wall -Wextra -Werror \
             -ffunction-sections -fdata-sections -Itests/demo_stubs -Imain \
-            "tests/test_demo_${demo}_runtime.c" -Wl,--gc-sections \
+            "tests/test_demo_${demo}_runtime.c" "${gc_flag}" \
             -o "${test_dir}/test_demo_${demo}_runtime"
         "${test_dir}/test_demo_${demo}_runtime"
     done
