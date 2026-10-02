@@ -150,6 +150,27 @@ bool app_json_get_bool(const char *json, const char *key, bool *out)
     return false;
 }
 
+static bool app_json_get_optional_string(const char *json, const char *key,
+                                         char *out, size_t max_len)
+{
+    if (!out || max_len == 0) return false;
+    if (!find_key(json, key)) {
+        out[0] = '\0';
+        return true;
+    }
+    return app_json_get_string(json, key, out, max_len);
+}
+
+static bool app_json_get_optional_int(const char *json, const char *key, int *out)
+{
+    return !find_key(json, key) || app_json_get_int(json, key, out);
+}
+
+static bool app_json_get_optional_bool(const char *json, const char *key, bool *out)
+{
+    return !find_key(json, key) || app_json_get_bool(json, key, out);
+}
+
 size_t app_protocol_build_hello(char *buf, size_t max_len, const char *firmware_version)
 {
     int ret = snprintf(buf, max_len,
@@ -260,8 +281,12 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
 
     const char *conf = find_key(json, "confirmation");
     if (conf && *conf == '{') {
-        app_json_get_string(conf, "planHash", proposal->plan_hash, sizeof(proposal->plan_hash));
-        app_json_get_string(conf, "expiresAt", proposal->expires_at, sizeof(proposal->expires_at));
+        if (!app_json_get_optional_string(conf, "planHash", proposal->plan_hash,
+                                          sizeof(proposal->plan_hash)) ||
+            !app_json_get_optional_string(conf, "expiresAt", proposal->expires_at,
+                                          sizeof(proposal->expires_at))) {
+            return false;
+        }
 
         const char *actions = find_key(conf, "actionIds");
         if (actions && *actions == '[') {
@@ -283,14 +308,21 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
     if (!card || *card != '{') return false;
 
     int schema_ver = 1;
-    app_json_get_int(card, "schemaVersion", &schema_ver);
+    if (!app_json_get_optional_int(card, "schemaVersion", &schema_ver)) return false;
     proposal->card.schema_version = (uint8_t)schema_ver;
 
-    app_json_get_string(card, "kind", proposal->card.kind, sizeof(proposal->card.kind));
-    app_json_get_string(card, "entityType", proposal->card.entity_type, sizeof(proposal->card.entity_type));
-    app_json_get_string(card, "title", proposal->card.title, sizeof(proposal->card.title));
-    app_json_get_string(card, "status", proposal->card.status, sizeof(proposal->card.status));
-    app_json_get_string(card, "footer", proposal->card.footer, sizeof(proposal->card.footer));
+    if (!app_json_get_optional_string(card, "kind", proposal->card.kind,
+                                      sizeof(proposal->card.kind)) ||
+        !app_json_get_optional_string(card, "entityType", proposal->card.entity_type,
+                                      sizeof(proposal->card.entity_type)) ||
+        !app_json_get_optional_string(card, "title", proposal->card.title,
+                                      sizeof(proposal->card.title)) ||
+        !app_json_get_optional_string(card, "status", proposal->card.status,
+                                      sizeof(proposal->card.status)) ||
+        !app_json_get_optional_string(card, "footer", proposal->card.footer,
+                                      sizeof(proposal->card.footer))) {
+        return false;
+    }
 
     const char *fields = find_key(card, "fields");
     if (fields && *fields == '[') {
@@ -301,10 +333,12 @@ bool app_protocol_parse_card(const char *json, passport_proposal_t *proposal)
             if (*p == '{') {
                 passport_card_field_t *f = &proposal->card.fields[proposal->card.field_count];
                 memset(f, 0, sizeof(*f));
-                app_json_get_string(p, "label", f->label, sizeof(f->label));
-                app_json_get_string(p, "value", f->value, sizeof(f->value));
-                app_json_get_string(p, "unit", f->unit, sizeof(f->unit));
-                app_json_get_bool(p, "emphasis", &f->emphasis);
+                if (!app_json_get_optional_string(p, "label", f->label, sizeof(f->label)) ||
+                    !app_json_get_optional_string(p, "value", f->value, sizeof(f->value)) ||
+                    !app_json_get_optional_string(p, "unit", f->unit, sizeof(f->unit)) ||
+                    !app_json_get_optional_bool(p, "emphasis", &f->emphasis)) {
+                    return false;
+                }
                 proposal->card.field_count++;
 
                 p = json_container_end(p);

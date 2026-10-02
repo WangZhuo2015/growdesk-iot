@@ -96,6 +96,53 @@ static void test_truncated_cards(void)
     assert(!proposal.valid);
 }
 
+static bool parse_card_body(const char *card_body)
+{
+    char json[1024];
+    int written = snprintf(json, sizeof(json),
+        "{\"runId\":\"test_run\",\"confirmation\":{\"planHash\":\"test_hash\","
+        "\"actionIds\":[\"test_action\"]},\"card\":{%s}}", card_body);
+    assert(written > 0 && (size_t)written < sizeof(json));
+
+    passport_proposal_t proposal;
+    return app_protocol_parse_card(json, &proposal);
+}
+
+static void fill_oversized_string(char *value, size_t value_size, size_t field_capacity)
+{
+    assert(field_capacity < value_size);
+    memset(value, 'x', field_capacity);
+    value[field_capacity] = '\0';
+}
+
+static void test_card_string_overflows(void)
+{
+    passport_card_t card = {0};
+    passport_card_field_t field = {0};
+    char oversized[sizeof(card.title) + 1];
+    char card_body[256];
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(card.title));
+    snprintf(card_body, sizeof(card_body), "\"title\":\"%s\"", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(card.entity_type));
+    snprintf(card_body, sizeof(card_body), "\"entityType\":\"%s\"", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.label));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"label\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.value));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"value\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.unit));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"unit\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+}
+
 int main(void)
 {
     char buf[1024];
@@ -201,6 +248,7 @@ int main(void)
     test_string_boundaries();
     test_envelope_and_nested_objects();
     test_truncated_cards();
+    test_card_string_overflows();
 
     puts("GrowDesk protocol & card parser tests: PASS");
     return 0;
