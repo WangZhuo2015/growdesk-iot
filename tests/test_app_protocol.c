@@ -4,6 +4,145 @@
 #include "../main/app_protocol.c"
 #include "../main/app_cards.c"
 
+static const char *card_json =
+    "{\"card\":{\"schemaVersion\":1,\"kind\":\"record_proposal\","
+    "\"entityType\":\"feeding\",\"title\":\"Feeding\",\"status\":\"awaiting_confirmation\","
+    "\"fields\":[{\"label\":\"Type\",\"value\":\"formula\"},"
+    "{\"label\":\"Amount\",\"value\":\"140\",\"unit\":\"mL\",\"emphasis\":true},"
+    "{\"label\":\"Note\",\"value\":\"literal } { and \\\"quote\\\"\"}]},"
+    "\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"test_action\"]},"
+    "\"runId\":\"test_run\",\"type\":\"card.present\",\"v\":1}";
+
+static void test_field_boundaries(void)
+{
+    passport_proposal_t proposal;
+    assert(app_protocol_parse_card(card_json, &proposal));
+    assert(proposal.card.fields[0].unit[0] == '\0');
+    assert(!proposal.card.fields[0].emphasis);
+    assert(proposal.card.field_count == 3);
+    assert(strcmp(proposal.card.fields[1].unit, "mL") == 0);
+    assert(proposal.card.fields[1].emphasis);
+    assert(strcmp(proposal.card.fields[2].value, "literal } { and \"quote\"") == 0);
+    assert(proposal.card.fields[2].unit[0] == '\0');
+    assert(!proposal.card.fields[2].emphasis);
+}
+
+static void test_whitespace_at_field_array_end(void)
+{
+    const char *json =
+        "{\"card\":{\"fields\":[{\"label\":\"Type\",\"value\":\"formula\"} \n]},"
+        "\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"test_action\"]},"
+        "\"runId\":\"test_run\"}";
+    passport_proposal_t proposal;
+    assert(app_protocol_parse_card(json, &proposal));
+    assert(proposal.card.field_count == 1);
+    const char *empty =
+        "{\"card\":{\"fields\":[ \n]},"
+        "\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"test_action\"]},"
+        "\"runId\":\"test_run\"}";
+    assert(app_protocol_parse_card(empty, &proposal));
+    assert(proposal.card.field_count == 0);
+}
+
+static void test_string_boundaries(void)
+{
+    char value[16];
+    assert(!app_json_get_string("{\"token\":\"unfinished", "token", value, sizeof(value)));
+    assert(value[0] == '\0');
+    assert(!app_json_get_string("{\"token\":\"0123456789abcdef\"}", "token", value, sizeof(value)));
+    assert(value[0] == '\0');
+    assert(app_json_get_string("{\"token\":\"0123456789abcde\"}", "token", value, sizeof(value)));
+    assert(strcmp(value, "0123456789abcde") == 0);
+    assert(!app_json_get_string("{\"token\":\"x\"", "token", value, sizeof(value)));
+    assert(!app_json_get_string("\"", "missing", value, sizeof(value)));
+    assert(!app_json_get_string("{}", "missing", value, sizeof(value)));
+    assert(!app_json_get_string(NULL, "missing", value, sizeof(value)));
+    assert(!app_json_get_string("{\"token\":\"bad\\\"}", "token", value, sizeof(value)));
+}
+
+static void test_envelope_and_nested_objects(void)
+{
+    char value[32];
+    assert(app_json_get_string("{\"data\":{\"accessToken\":\"test_token\"}}", "accessToken", value, sizeof(value)));
+    assert(strcmp(value, "test_token") == 0);
+    assert(app_json_get_string("{\"nested\":{\"type\":\"wrong\"},\"type\":\"ready\"}", "type", value, sizeof(value)));
+    assert(strcmp(value, "ready") == 0);
+    const char *siblings = "{\"name\":\"one\"},{\"unit\":\"mL\"}";
+    assert(!app_json_get_string(siblings, "unit", value, sizeof(value)));
+    assert(!app_json_get_string("{\"text\":\"escaped \\\"unit\\\": \\\"mL\\\"\"}", "unit", value, sizeof(value)));
+    int rate = 0, channels = 0;
+    assert(app_protocol_parse_tts_start("{\"type\":\"tts.start\",\"audioFormat\":{\"sampleRate\":16000,\"channels\":2}}", NULL, 0, &rate, &channels));
+    assert(rate == 16000 && channels == 2);
+}
+
+static void test_truncated_cards(void)
+{
+    passport_proposal_t proposal;
+    char truncated[2048];
+    size_t n = strlen(card_json);
+    assert(n < sizeof(truncated));
+    for (size_t i = 0; i < n; ++i) {
+        memcpy(truncated, card_json, i);
+        truncated[i] = '\0';
+        assert(!app_protocol_parse_card(truncated, &proposal));
+        assert(!proposal.valid);
+    }
+    char oversized[256];
+    memset(oversized, 'x', sizeof(oversized));
+    oversized[sizeof(oversized)-1] = '\0';
+    char json[2048];
+    snprintf(json, sizeof(json), "{\"runId\":\"test_run\",\"confirmation\":{\"planHash\":\"test_hash\",\"actionIds\":[\"%s\"]},\"card\":{}}", oversized);
+    assert(!app_protocol_parse_card(json, &proposal));
+    assert(!proposal.valid);
+}
+
+static bool parse_card_body(const char *card_body)
+{
+    char json[1024];
+    int written = snprintf(json, sizeof(json),
+        "{\"runId\":\"test_run\",\"confirmation\":{\"planHash\":\"test_hash\","
+        "\"actionIds\":[\"test_action\"]},\"card\":{%s}}", card_body);
+    assert(written > 0 && (size_t)written < sizeof(json));
+
+    passport_proposal_t proposal;
+    return app_protocol_parse_card(json, &proposal);
+}
+
+static void fill_oversized_string(char *value, size_t value_size, size_t field_capacity)
+{
+    assert(field_capacity < value_size);
+    memset(value, 'x', field_capacity);
+    value[field_capacity] = '\0';
+}
+
+static void test_card_string_overflows(void)
+{
+    passport_card_t card = {0};
+    passport_card_field_t field = {0};
+    char oversized[sizeof(card.title) + 1];
+    char card_body[256];
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(card.title));
+    snprintf(card_body, sizeof(card_body), "\"title\":\"%s\"", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(card.entity_type));
+    snprintf(card_body, sizeof(card_body), "\"entityType\":\"%s\"", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.label));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"label\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.value));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"value\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+
+    fill_oversized_string(oversized, sizeof(oversized), sizeof(field.unit));
+    snprintf(card_body, sizeof(card_body), "\"fields\":[{\"unit\":\"%s\"}]", oversized);
+    assert(!parse_card_body(card_body));
+}
+
 int main(void)
 {
     char buf[1024];
@@ -103,6 +242,13 @@ int main(void)
     assert(app_protocol_parse_error(err_json, code, sizeof(code), msg, sizeof(msg)));
     assert(strcmp(code, "VOICE_TOO_LONG") == 0);
     assert(strcmp(msg, "Recording exceeded 30 seconds") == 0);
+
+    test_field_boundaries();
+    test_whitespace_at_field_array_end();
+    test_string_boundaries();
+    test_envelope_and_nested_objects();
+    test_truncated_cards();
+    test_card_string_overflows();
 
     puts("GrowDesk protocol & card parser tests: PASS");
     return 0;
